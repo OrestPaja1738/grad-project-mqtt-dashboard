@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Environmental Station Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <style>
+    /* ── CRT monochrome phosphor theme ────────────────────── */
+    :root {
+      --bg:           #0a0a0a;
+      --panel:        #0f0f0f;
+      --border:       #1a2a1a;
+      --border-glow:  #003300;
+      --green:        #00ff41;
+      --green-dim:    #00802080;
+      --green-dimmer: #004a1260;
+      --amber:        #ffb000;
+      --amber-dim:    #80580040;
+      --ice:          #66ccff;
+      --ice-dim:      #335e7a40;
+      --white:        #cccccc;
+      --white-dim:    #66666640;
+      --text-dim:     #2a6a2a;
+      --text-bright:  #00ff41;
+      --glow-green:   0 0 8px #00ff4180, 0 0 2px #00ff4140;
+      --glow-amber:   0 0 8px #ffb00080, 0 0 2px #ffb00040;
+      --glow-ice:     0 0 8px #66ccff80, 0 0 2px #66ccff40;
+      --glow-white:   0 0 8px #cccccc60, 0 0 2px #cccccc30;
+      --scanline:     repeating-linear-gradient(
+        transparent 0px, transparent 2px,
+        rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px
+      );
+      --font: 'IBM Plex Mono', 'Courier New', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--green);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 100vh;
+      position: relative;
+    }
+    /* scanline overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: var(--scanline);
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Header ────────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-shadow: var(--glow-green);
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #ff3333;
+      transition: background 0.3s;
+    }
+    .status-dot.connected {
+      background: var(--green);
+      box-shadow: var(--glow-green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* ── Time range selector ───────────────────────────────── */
+    .time-selector {
+      display: flex;
+      gap: 4px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .time-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-family: var(--font);
+      font-size: 12px;
+      padding: 5px 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 1px;
+    }
+    .time-btn:hover {
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .time-btn.active {
+      border-color: var(--green);
+      color: var(--green);
+      text-shadow: var(--glow-green);
+      background: #00ff4110;
+    }
+
+    /* ── Layout container ──────────────────────────────────── */
+    .dashboard {
+      padding: 16px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── Current readings cards ─────────────────────────────── */
+    .readings-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .reading-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 14px 16px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .reading-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 4px;
+      box-shadow: inset 0 0 30px rgba(0,255,65,0.03);
+      pointer-events: none;
+    }
+    .reading-label {
+      font-size: 10px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .reading-value {
+      font-size: 32px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .reading-unit {
+      font-size: 11px;
+      margin-top: 2px;
+    }
+    .reading-card.temp  { --card-color: var(--green); }
+    .reading-card.hum   { --card-color: var(--amber); }
+    .reading-card.co2   { --card-color: var(--ice); }
+    .reading-card.voc   { --card-color: var(--white); }
+    .reading-card .reading-label { color: var(--text-dim); }
+    .reading-card .reading-value { color: var(--card-color); text-shadow: 0 0 10px color-mix(in srgb, var(--card-color), transparent 60%); }
+    .reading-card .reading-unit  { color: color-mix(in srgb, var(--card-color), transparent 40%); }
+
+    /* ── Charts grid ───────────────────────────────────────── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    .chart-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px 14px;
+    }
+    .chart-panel h3 {
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .chart-panel.temp h3  { color: var(--green); }
+    .chart-panel.hum h3   { color: var(--amber); }
+    .chart-panel.co2 h3   { color: var(--ice); }
+    .chart-panel.voc h3   { color: var(--white); }
+    .chart-wrap {
+      position: relative;
+      height: 180px;
+    }
+
+    /* ── Terminal windows ──────────────────────────────────── */
+    .terminals-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    .terminal-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 14px;
+    }
+    .terminal-panel h3 {
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 4px;
+    }
+    .terminal-log {
+      height: 160px;
+      overflow-y: auto;
+      font-size: 12px;
+      color: var(--green);
+      scrollbar-width: thin;
+      scrollbar-color: #1a3a1a transparent;
+    }
+    .terminal-log .log-line {
+      white-space: nowrap;
+      padding: 1px 0;
+      opacity: 0;
+      animation: fadeIn 0.3s forwards;
+    }
+    .terminal-log .log-line .ts  { color: var(--text-dim); margin-right: 10px; }
+    .terminal-log .log-line .val { font-weight: 600; }
+    .terminal-log .log-line .val.null-val { color: #553333; font-weight: 400; }
+
+    @keyframes fadeIn {
+      to { opacity: 1; }
+    }
+
+    .last-update {
+      text-align: center;
+      font-size: 10px;
+      color: var(--text-dim);
+      padding: 8px;
+      letter-spacing: 1px;
+    }
+
+    /* ── Responsive ────────────────────────────────────────── */
+    @media (max-width: 800px) {
+      .readings-row   { grid-template-columns: repeat(2, 1fr); }
+      .charts-grid    { grid-template-columns: 1fr; }
+      .terminals-grid { grid-template-columns: 1fr; }
+      .reading-value  { font-size: 24px; }
+    }
+    @media (max-width: 480px) {
+      .readings-row { grid-template-columns: 1fr; }
+      .header h1    { font-size: 12px; }
+      .dashboard    { padding: 12px; }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- ── Header ──────────────────────────────────────────── -->
+  <div class="header">
+    <h1>Environmental Station Dashboard</h1>
+    <div class="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">DISCONNECTED</span>
+    </div>
+  </div>
+
+  <!-- ── Time range selector ─────────────────────────────── -->
+  <div class="time-selector">
+    <button class="time-btn" data-hours="0.5">30M</button>
+    <button class="time-btn active" data-hours="1">1H</button>
+    <button class="time-btn" data-hours="6">6H</button>
+    <button class="time-btn" data-hours="24">24H</button>
+  </div>
+
+  <div class="dashboard">
+    <!-- ── Current readings ─────────────────────────────── -->
+    <div class="readings-row">
+      <div class="reading-card temp">
+        <div class="reading-label">Temperature</div>
+        <div class="reading-value" id="curTemp">—</div>
+        <div class="reading-unit">°C</div>
+      </div>
+      <div class="reading-card hum">
+        <div class="reading-label">Humidity</div>
+        <div class="reading-value" id="curHum">—</div>
+        <div class="reading-unit">%RH</div>
+      </div>
+      <div class="reading-card co2">
+        <div class="reading-label">CO₂</div>
+        <div class="reading-value" id="curCO2">—</div>
+        <div class="reading-unit">ppm</div>
+      </div>
+      <div class="reading-card voc">
+        <div class="reading-label">VOC Index</div>
+        <div class="reading-value" id="curVOC">—</div>
+        <div class="reading-unit">idx</div>
+      </div>
+    </div>
+
+    <!-- ── Charts ───────────────────────────────────────── -->
+    <div class="charts-grid">
+      <div class="chart-panel temp">
+        <h3>Temperature</h3>
+        <div class="chart-wrap"><canvas id="chartTemp"></canvas></div>
+      </div>
+      <div class="chart-panel hum">
+        <h3>Humidity</h3>
+        <div class="chart-wrap"><canvas id="chartHum"></canvas></div>
+      </div>
+      <div class="chart-panel co2">
+        <h3>CO₂ Concentration</h3>
+        <div class="chart-wrap"><canvas id="chartCO2"></canvas></div>
+      </div>
+      <div class="chart-panel voc">
+        <h3>VOC Index</h3>
+        <div class="chart-wrap"><canvas id="chartVOC"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── Terminals ────────────────────────────────────── -->
+    <div class="terminals-grid">
+      <div class="terminal-panel">
+        <h3>Temperature Log</h3>
+        <div class="terminal-log" id="termTemp"></div>
+      </div>
+      <div class="terminal-panel">
+        <h3>Humidity Log</h3>
+        <div class="terminal-log" id="termHum"></div>
+      </div>
+      <div class="terminal-panel">
+        <h3>CO₂ Log</h3>
+        <div class="terminal-log" id="termCO2"></div>
+      </div>
+      <div class="terminal-panel">
+        <h3>VOC Log</h3>
+        <div class="terminal-log" id="termVOC"></div>
+      </div>
+    </div>
+
+    <div class="last-update">Last update: <span id="lastUpdate">—</span></div>
+  </div>
+
+  <script>
+    // ── Configuration ────────────────────────────────────
+    const MAX_TERMINAL_LINES = 20;
+    let selectedHours = 1;
+
+    // ── Chart colors matching the phosphor aesthetic ─────
+    const COLORS = {
+      temp: { line: '#00ff41', bg: '#00ff4118' },
+      hum:  { line: '#ffb000', bg: '#ffb00018' },
+      co2:  { line: '#66ccff', bg: '#66ccff18' },
+      voc:  { line: '#cccccc', bg: '#cccccc18' },
+    };
+
+    // ── Chart.js defaults for the CRT look ──────────────
+    Chart.defaults.color = '#2a6a2a';
+    Chart.defaults.borderColor = '#1a2a1a';
+    Chart.defaults.font.family = "'IBM Plex Mono', monospace";
+    Chart.defaults.font.size = 10;
+
+    function makeChartConfig(color, label, unit) {
+      return {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: label,
+            data: [],
+            borderColor: color.line,
+            backgroundColor: color.bg,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            pointHitRadius: 8,
+            tension: 0.3,
+            fill: false,
+            spanGaps: true,       // bridges over null values — no gaps
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 300 },
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: {
+              type: 'time',
+              time: { tooltipFormat: 'HH:mm:ss', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } },
+              grid: { color: '#0d1a0d' },
+              ticks: { maxTicksLimit: 8, color: '#1a4a1a' },
+            },
+            y: {
+              grid: { color: '#0d1a0d' },
+              ticks: { color: '#1a4a1a', callback: (v) => v + (unit ? ' ' + unit : '') },
+            }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#0a0a0aee',
+              titleColor: '#00ff41',
+              bodyColor: '#00ff41',
+              borderColor: '#003300',
+              borderWidth: 1,
+              titleFont: { family: "'IBM Plex Mono', monospace" },
+              bodyFont: { family: "'IBM Plex Mono', monospace" },
+            }
+          }
+        }
+      };
+    }
+
+    // ── Create charts ───────────────────────────────────
+    const chartTemp = new Chart(document.getElementById('chartTemp'), makeChartConfig(COLORS.temp, 'Temperature', '°C'));
+    const chartHum  = new Chart(document.getElementById('chartHum'),  makeChartConfig(COLORS.hum,  'Humidity', '%'));
+    const chartCO2  = new Chart(document.getElementById('chartCO2'),  makeChartConfig(COLORS.co2,  'CO₂', 'ppm'));
+    const chartVOC  = new Chart(document.getElementById('chartVOC'),  makeChartConfig(COLORS.voc,  'VOC', ''));
+
+    const charts = { temp: chartTemp, hum: chartHum, co2: chartCO2, voc: chartVOC };
+
+    // ── Populate charts from history ────────────────────
+    async function loadHistory(hours) {
+      try {
+        const res  = await fetch(`/api/readings?hours=${hours}`);
+        const rows = await res.json();
+
+        const times = rows.map(r => new Date(r.received_at || r.timestamp));
+        const temps = rows.map(r => r.temperature_c);
+        const hums  = rows.map(r => r.humidity_rh);
+        const co2s  = rows.map(r => r.co2_ppm);
+        const vocs  = rows.map(r => r.voc_index);
+
+        setChartData(chartTemp, times, temps);
+        setChartData(chartHum,  times, hums);
+        setChartData(chartCO2,  times, co2s);
+        setChartData(chartVOC,  times, vocs);
+
+        // Populate terminals from history (last N)
+        clearTerminals();
+        const recent = rows.slice(-MAX_TERMINAL_LINES);
+        recent.forEach(r => addToTerminals(r));
+
+        // Update current cards from the very latest
+        if (rows.length > 0) updateCurrentCards(rows[rows.length - 1]);
+      } catch (e) {
+        console.error('Failed to load history:', e);
+      }
+    }
+
+    function setChartData(chart, labels, data) {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = data;
+      chart.update('none');
+    }
+
+    function appendChartPoint(chart, time, value) {
+      chart.data.labels.push(time);
+      chart.data.datasets[0].data.push(value);
+
+      // trim to keep the chart within the selected window
+      const windowMs = selectedHours * 3600000;
+      const now = Date.now();
+      while (chart.data.labels.length > 0 && (now - chart.data.labels[0].getTime()) > windowMs) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+      }
+      chart.update('none');
+    }
+
+    // ── Current reading cards ───────────────────────────
+    function updateCurrentCards(r) {
+      document.getElementById('curTemp').textContent = r.temperature_c != null ? r.temperature_c.toFixed(1) : '—';
+      document.getElementById('curHum').textContent  = r.humidity_rh   != null ? r.humidity_rh.toFixed(1)   : '—';
+      document.getElementById('curCO2').textContent  = r.co2_ppm       != null ? r.co2_ppm                  : '—';
+      document.getElementById('curVOC').textContent  = r.voc_index     != null ? r.voc_index                : '—';
+      document.getElementById('lastUpdate').textContent = r.timestamp || new Date().toLocaleTimeString();
+    }
+
+    // ── Terminal windows ────────────────────────────────
+    function clearTerminals() {
+      ['termTemp','termHum','termCO2','termVOC'].forEach(id => {
+        document.getElementById(id).innerHTML = '';
+      });
+    }
+
+    function addTerminalLine(termId, timestamp, value, unit) {
+      const term = document.getElementById(termId);
+      const ts = timestamp ? timestamp.split(' ')[1] || timestamp : '--:--:--';
+      const isNull = value == null;
+      const displayVal = isNull ? 'NULL' : value + ' ' + unit;
+
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      line.innerHTML = `<span class="ts">${ts}</span><span class="val ${isNull ? 'null-val' : ''}">${displayVal}</span>`;
+
+      // Insert at top
+      term.insertBefore(line, term.firstChild);
+
+      // Trim old lines
+      while (term.children.length > MAX_TERMINAL_LINES) {
+        term.removeChild(term.lastChild);
+      }
+    }
+
+    function addToTerminals(r) {
+      addTerminalLine('termTemp', r.timestamp, r.temperature_c != null ? r.temperature_c.toFixed(2) : null, '°C');
+      addTerminalLine('termHum',  r.timestamp, r.humidity_rh   != null ? r.humidity_rh.toFixed(2)   : null, '%RH');
+      addTerminalLine('termCO2',  r.timestamp, r.co2_ppm,       'ppm');
+      addTerminalLine('termVOC',  r.timestamp, r.voc_index,     'idx');
+    }
+
+    // ── Time selector buttons ───────────────────────────
+    document.querySelectorAll('.time-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedHours = parseFloat(btn.dataset.hours);
+        loadHistory(selectedHours);
+      });
+    });
+
+    // ── WebSocket connection ────────────────────────────
+    let ws;
+    let wsRetryTimer;
+
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}`);
+
+      ws.onopen = () => {
+        document.getElementById('statusDot').classList.add('connected');
+        document.getElementById('statusText').textContent = 'CONNECTED';
+        if (wsRetryTimer) { clearInterval(wsRetryTimer); wsRetryTimer = null; }
+      };
+
+      ws.onclose = () => {
+        document.getElementById('statusDot').classList.remove('connected');
+        document.getElementById('statusText').textContent = 'DISCONNECTED';
+        // Auto-reconnect every 3 seconds
+        if (!wsRetryTimer) {
+          wsRetryTimer = setInterval(() => {
+            if (!ws || ws.readyState === WebSocket.CLOSED) connectWS();
+          }, 3000);
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'reading' && msg.data) {
+            const r = msg.data;
+            const t = new Date(r.received_at || r.timestamp);
+
+            // Update current cards
+            updateCurrentCards(r);
+
+            // Append to charts
+            appendChartPoint(chartTemp, t, r.temperature_c);
+            appendChartPoint(chartHum,  t, r.humidity_rh);
+            appendChartPoint(chartCO2,  t, r.co2_ppm);
+            appendChartPoint(chartVOC,  t, r.voc_index);
+
+            // Append to terminals
+            addToTerminals(r);
+          }
+        } catch (e) {
+          console.warn('WS message parse error:', e);
+        }
+      };
+    }
+
+    // ── Boot ────────────────────────────────────────────
+    loadHistory(selectedHours);
+    connectWS();
+  </script>
+</body>
+</html>
