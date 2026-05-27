@@ -198,7 +198,7 @@ mqttClient.on('message', (topic, payload) => {
     row.received_at = stored.received_at;
   }
 
-  console.log(`[WS]   Broadcast: seq=${row.sequence} received_at=${row.received_at ?? '--'} firmware_ts=${row.timestamp}`);
+  console.log(`[WS]   Broadcast: seq=${row.sequence} received_at=${row.received_at ?? '--'} firmware_ts=${row.timestamp || '--'}`);
   broadcast(row);
 });
 

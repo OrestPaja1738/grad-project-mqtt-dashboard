@@ -387,7 +387,7 @@
             borderColor: color.line,
             backgroundColor: color.bg,
             borderWidth: 1.5,
-            pointRadius: 0,
+            pointRadius: 1.5,
             pointHitRadius: 8,
             tension: 0.3,
             fill: false,
@@ -408,7 +408,15 @@
             },
             y: {
               grid: { color: '#0d1a0d' },
-              ticks: { color: '#1a4a1a', callback: (v) => v + (unit ? ' ' + unit : '') },
+              ticks: {
+                color: '#1a4a1a',
+                callback: (v) => {
+                  if (typeof v === 'number') {
+                    return v.toFixed(2) + (unit ? ' ' + unit : '');
+                  }
+                  return v + (unit ? ' ' + unit : '');
+                }
+              },
             }
           },
           plugins: {
@@ -475,6 +483,10 @@
       const data   = chart.data.datasets[0].data;
       const ts     = time.getTime();
 
+      if (Number.isNaN(ts)) {
+        return;
+      }
+
       // Insert by timestamp, not by arrival order.
       let lo = 0;
       let hi = labels.length;
@@ -506,7 +518,7 @@
       document.getElementById('curHum').textContent  = r.humidity_rh   != null ? r.humidity_rh.toFixed(1)   : '—';
       document.getElementById('curCO2').textContent  = r.co2_ppm       != null ? r.co2_ppm                  : '—';
       document.getElementById('curVOC').textContent  = r.voc_index     != null ? r.voc_index                : '—';
-      document.getElementById('lastUpdate').textContent = r.timestamp || new Date().toLocaleTimeString();
+      document.getElementById('lastUpdate').textContent = r.received_at || new Date().toLocaleTimeString();
     }
 
     // ── Terminal windows ────────────────────────────────
@@ -536,10 +548,12 @@
     }
 
     function addToTerminals(r) {
-      addTerminalLine('termTemp', r.timestamp, r.temperature_c != null ? r.temperature_c.toFixed(2) : null, '°C');
-      addTerminalLine('termHum',  r.timestamp, r.humidity_rh   != null ? r.humidity_rh.toFixed(2)   : null, '%RH');
-      addTerminalLine('termCO2',  r.timestamp, r.co2_ppm,       'ppm');
-      addTerminalLine('termVOC',  r.timestamp, r.voc_index,     'idx');
+      const display_time = r.received_at || new Date().toLocaleString();
+
+      addTerminalLine('termTemp', display_time, r.temperature_c != null ? r.temperature_c.toFixed(2) : null, '°C');
+      addTerminalLine('termHum',  display_time, r.humidity_rh   != null ? r.humidity_rh.toFixed(2)   : null, '%RH');
+      addTerminalLine('termCO2',  display_time, r.co2_ppm,       'ppm');
+      addTerminalLine('termVOC',  display_time, r.voc_index,     'idx');
     }
 
     // ── Time selector buttons ───────────────────────────
@@ -564,6 +578,9 @@
         document.getElementById('statusDot').classList.add('connected');
         document.getElementById('statusText').textContent = 'CONNECTED';
         if (wsRetryTimer) { clearInterval(wsRetryTimer); wsRetryTimer = null; }
+
+        // Reload recent history after reconnect so charts recover missed points.
+        loadHistory(selectedHours);
       };
 
       ws.onclose = () => {
