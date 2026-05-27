@@ -68,8 +68,12 @@ const server = http.createServer((req, res) => {
   // REST API: readings for a time window
   if (req.url.startsWith('/api/readings')) {
     const url    = new URL(req.url, `http://${req.headers.host}`);
-    const hours  = parseInt(url.searchParams.get('hours') || '1', 10);
-    const rows   = queryByHours.all(Math.max(1, Math.min(hours, 168))); // cap at 7 days
+    const requested_hours = parseFloat(url.searchParams.get('hours') || '1');
+    const safe_hours = Number.isFinite(requested_hours)
+      ? Math.max(0.1, Math.min(requested_hours, 168))
+      : 1;
+
+    const rows = queryByHours.all(safe_hours); // cap at 7 days
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*'

@@ -621,6 +621,25 @@
       };
     }
 
+        // ── Recover after tab sleep / minimize / focus change ──
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        loadHistory(selectedHours);
+
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+          connectWS();
+        }
+      }
+    });
+
+    window.addEventListener('focus', () => {
+      loadHistory(selectedHours);
+
+      if (!ws || ws.readyState === WebSocket.CLOSED) {
+        connectWS();
+      }
+    });
+
     // ── Boot ────────────────────────────────────────────
     loadHistory(selectedHours);
     connectWS();
