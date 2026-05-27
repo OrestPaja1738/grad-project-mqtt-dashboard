@@ -17,6 +17,7 @@ const { WebSocketServer } = require('ws');
 // ── Configuration ──────────────────────────────────────────
 const MQTT_BROKER   = 'mqtt://localhost:1883';
 const MQTT_TOPIC    = 'sensors/xiao01/readings';
+const MQTT_ACK_TOPIC = 'sensors/xiao01/ack';
 const HTTP_PORT     = 3000;
 const DB_PATH       = path.join(__dirname, 'data.db');
 const HTML_PATH     = path.join(__dirname, 'index.html');
@@ -159,6 +160,29 @@ mqttClient.on('error', (err) => {
   console.error('[MQTT] Error:', err.message);
 });
 
+
+function publish_ack(row, duplicate = false) {
+  const ack = {
+    device_id: row.device_id,
+    sequence: row.sequence,
+    stored: true
+  };
+
+  const payload = JSON.stringify(ack);
+  mqttClient.publish(MQTT_ACK_TOPIC, payload, (err) => {
+    if (err) {
+      console.error(`[ACK] Publish failed for seq=${row.sequence}:`, err.message);
+      return;
+    }
+
+    if (duplicate) {
+      console.log(`[ACK] Published ACK for duplicate seq=${row.sequence}`);
+    } else {
+      console.log(`[ACK] Published ACK for seq=${row.sequence}`);
+    }
+  });
+}
+
 mqttClient.on('message', (topic, payload) => {
   let record;
   try {
@@ -186,8 +210,9 @@ mqttClient.on('message', (topic, payload) => {
   const info = insertStmt.run(row);
 
   if (info.changes === 0) {
-    // Duplicate — row already existed, nothing stored
+    // Duplicate — row already existed, so the firmware can safely consider it stored.
     console.log(`[DEDUP] Duplicate skipped: ${row.device_id} seq=${row.sequence}`);
+    publish_ack(row, true);
     return;
   }
 
@@ -201,6 +226,8 @@ mqttClient.on('message', (topic, payload) => {
   if (stored) {
     row.received_at = stored.received_at;
   }
+
+  publish_ack(row, false);
 
   console.log(`[WS]   Broadcast: seq=${row.sequence} received_at=${row.received_at ?? '--'} firmware_ts=${row.timestamp || '--'}`);
   broadcast(row);
