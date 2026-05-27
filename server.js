@@ -190,8 +190,15 @@ mqttClient.on('message', (topic, payload) => {
   // New record stored — log and push to all browsers
   console.log(`[DB]   Stored: seq=${row.sequence}  T=${row.temperature_c ?? '--'}  RH=${row.humidity_rh ?? '--'}  CO2=${row.co2_ppm ?? '--'}  VOC=${row.voc_index ?? '--'}`);
 
-  // Attach the auto-generated id for the frontend
+  // Attach the auto-generated id and server-side timestamp for the frontend
   row.id = info.lastInsertRowid;
+
+  const stored = db.prepare('SELECT received_at FROM readings WHERE id = ?').get(row.id);
+  if (stored) {
+    row.received_at = stored.received_at;
+  }
+
+  console.log(`[WS]   Broadcast: seq=${row.sequence} received_at=${row.received_at ?? '--'} firmware_ts=${row.timestamp}`);
   broadcast(row);
 });
 

@@ -471,15 +471,31 @@
     }
 
     function appendChartPoint(chart, time, value) {
-      chart.data.labels.push(time);
-      chart.data.datasets[0].data.push(value);
+      const labels = chart.data.labels;
+      const data   = chart.data.datasets[0].data;
+      const ts     = time.getTime();
+
+      // Insert by timestamp, not by arrival order.
+      let lo = 0;
+      let hi = labels.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (labels[mid].getTime() < ts) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+
+      labels.splice(lo, 0, time);
+      data.splice(lo, 0, value);
 
       // trim to keep the chart within the selected window
       const windowMs = selectedHours * 3600000;
       const now = Date.now();
-      while (chart.data.labels.length > 0 && (now - chart.data.labels[0].getTime()) > windowMs) {
-        chart.data.labels.shift();
-        chart.data.datasets[0].data.shift();
+      while (labels.length > 0 && (now - labels[0].getTime()) > windowMs) {
+        labels.shift();
+        data.shift();
       }
       chart.update('none');
     }
@@ -566,7 +582,9 @@
           const msg = JSON.parse(event.data);
           if (msg.type === 'reading' && msg.data) {
             const r = msg.data;
+            const usedKey = r.received_at ? 'received_at' : 'timestamp';
             const t = new Date(r.received_at || r.timestamp);
+            console.log(`[WS] seq=${r.sequence} chart_time=${usedKey}=${r[usedKey]}`);
 
             // Update current cards
             updateCurrentCards(r);
