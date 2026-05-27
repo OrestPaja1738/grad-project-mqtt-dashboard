@@ -15,7 +15,7 @@ const Database = require('better-sqlite3');
 const { WebSocketServer } = require('ws');
 
 // ── Configuration ──────────────────────────────────────────
-const MQTT_BROKER   = 'mqtt://192.168.0.4:1883';
+const MQTT_BROKER   = 'mqtt://localhost:1883';
 const MQTT_TOPIC    = 'sensors/xiao01/readings';
 const HTTP_PORT     = 3000;
 const DB_PATH       = path.join(__dirname, 'data.db');
