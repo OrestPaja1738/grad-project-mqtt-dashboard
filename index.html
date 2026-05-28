@@ -360,7 +360,9 @@
   <script>
     // ── Configuration ────────────────────────────────────
     const MAX_TERMINAL_LINES = 20;
-    let selectedHours = 1;
+    let selectedHours = parseFloat(localStorage.getItem('selectedHours') || '1');
+    let reloadTimer = null;
+    let historyLoading = false;
 
     // ── Chart colors matching the phosphor aesthetic ─────
     const COLORS = {
@@ -452,6 +454,7 @@
 
     // ── Populate charts from history ────────────────────
     async function loadHistory(hours) {
+      historyLoading = true;
       try {
         const res  = await fetch(`/api/readings?hours=${hours}`);
         const rows = await res.json();
@@ -476,7 +479,20 @@
         if (rows.length > 0) updateCurrentCards(rows[rows.length - 1]);
       } catch (e) {
         console.error('Failed to load history:', e);
+      } finally {
+        historyLoading = false;
       }
+    }
+
+    function scheduleReload() {
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+      }
+
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null;
+        loadHistory(selectedHours);
+      }, 300);
     }
 
     function apply_time_window(chart) {
@@ -574,11 +590,22 @@
     }
 
     // ── Time selector buttons ───────────────────────────
+    function updateActiveTimeButton() {
+      document.querySelectorAll('.time-btn').forEach(btn => {
+        const buttonHours = parseFloat(btn.dataset.hours);
+        if (buttonHours === selectedHours) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+    }
+
     document.querySelectorAll('.time-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
         selectedHours = parseFloat(btn.dataset.hours);
+        localStorage.setItem('selectedHours', String(selectedHours));
+        updateActiveTimeButton();
         loadHistory(selectedHours);
       });
     });
@@ -597,7 +624,7 @@
         if (wsRetryTimer) { clearInterval(wsRetryTimer); wsRetryTimer = null; }
 
         // Reload recent history after reconnect so charts recover missed points.
-        loadHistory(selectedHours);
+        scheduleReload();
       };
 
       ws.onclose = () => {
@@ -615,8 +642,8 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'history_refresh') {
-            console.log('[WS] history_refresh received — reloading chart history');
-            loadHistory(selectedHours);
+            console.log('[WS] history_refresh received — scheduling chart history reload');
+            scheduleReload();
             return;
           }
 
@@ -628,6 +655,13 @@
 
             // Update current cards
             updateCurrentCards(r);
+
+            // If a full history reload is already in progress, avoid racing Chart.js state.
+            // The scheduled reload will rebuild charts and terminals from the backend.
+            if (historyLoading) {
+              scheduleReload();
+              return;
+            }
 
             // Append to charts
             appendChartPoint(chartTemp, t, r.temperature_c);
@@ -647,7 +681,7 @@
         // ── Recover after tab sleep / minimize / focus change ──
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) {
-        loadHistory(selectedHours);
+        scheduleReload();
 
         if (!ws || ws.readyState === WebSocket.CLOSED) {
           connectWS();
@@ -656,7 +690,7 @@
     });
 
     window.addEventListener('focus', () => {
-      loadHistory(selectedHours);
+      scheduleReload();
 
       if (!ws || ws.readyState === WebSocket.CLOSED) {
         connectWS();
@@ -664,6 +698,7 @@
     });
 
     // ── Boot ────────────────────────────────────────────
+    updateActiveTimeButton();
     loadHistory(selectedHours);
     connectWS();
   </script>
