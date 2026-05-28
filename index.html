@@ -449,7 +449,7 @@
         const res  = await fetch(`/api/readings?hours=${hours}`);
         const rows = await res.json();
 
-        const times = rows.map(r => new Date(r.received_at || r.timestamp));
+        const times = rows.map(r => new Date(r.display_time || r.received_at || r.timestamp));
         const temps = rows.map(r => r.temperature_c);
         const hums  = rows.map(r => r.humidity_rh);
         const co2s  = rows.map(r => r.co2_ppm);
@@ -472,9 +472,18 @@
       }
     }
 
+    function apply_time_window(chart) {
+      const now = Date.now();
+      const window_ms = selectedHours * 3600000;
+
+      chart.options.scales.x.min = now - window_ms;
+      chart.options.scales.x.max = now;
+    }
+
     function setChartData(chart, labels, data) {
       chart.data.labels = labels;
       chart.data.datasets[0].data = data;
+      apply_time_window(chart);
       chart.update('none');
     }
 
@@ -509,6 +518,7 @@
         labels.shift();
         data.shift();
       }
+      apply_time_window(chart);
       chart.update('none');
     }
 
@@ -548,7 +558,7 @@
     }
 
     function addToTerminals(r) {
-      const display_time = r.received_at || new Date().toLocaleString();
+      const display_time = r.display_time || r.received_at || new Date().toLocaleString();
 
       addTerminalLine('termTemp', display_time, r.temperature_c != null ? r.temperature_c.toFixed(2) : null, '°C');
       addTerminalLine('termHum',  display_time, r.humidity_rh   != null ? r.humidity_rh.toFixed(2)   : null, '%RH');
@@ -597,10 +607,16 @@
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          if (msg.type === 'history_refresh') {
+            console.log('[WS] history_refresh received — reloading chart history');
+            loadHistory(selectedHours);
+            return;
+          }
+
           if (msg.type === 'reading' && msg.data) {
             const r = msg.data;
-            const usedKey = r.received_at ? 'received_at' : 'timestamp';
-            const t = new Date(r.received_at || r.timestamp);
+            const usedKey = r.display_time ? 'display_time' : (r.received_at ? 'received_at' : 'timestamp');
+            const t = new Date(r.display_time || r.received_at || r.timestamp);
             console.log(`[WS] seq=${r.sequence} chart_time=${usedKey}=${r[usedKey]}`);
 
             // Update current cards

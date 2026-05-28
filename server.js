@@ -18,6 +18,7 @@ const { WebSocketServer } = require('ws');
 const MQTT_BROKER   = 'mqtt://localhost:1883';
 const MQTT_TOPIC    = 'sensors/xiao01/readings';
 const MQTT_ACK_TOPIC = 'sensors/xiao01/ack';
+const SAMPLE_INTERVAL_SEC = 60;
 const HTTP_PORT     = 3000;
 const DB_PATH       = path.join(__dirname, 'data.db');
 const HTML_PATH     = path.join(__dirname, 'index.html');
@@ -39,29 +40,61 @@ db.exec(`
     voc_index     INTEGER,
     temp_sources  INTEGER,
     hum_sources   INTEGER,
+    replayed      INTEGER DEFAULT 0,
+    estimated_measured_at TEXT,
     received_at   TEXT    DEFAULT (datetime('now','localtime')),
     UNIQUE(device_id, sequence)
   );
 `);
 
+function ensure_column(table_name, column_name, column_definition) {
+  const columns = db.pragma(`table_info(${table_name})`);
+  const exists = columns.some((column) => column.name === column_name);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${table_name} ADD COLUMN ${column_definition}`);
+    console.log(`[DB]   Added column ${column_name} to ${table_name}`);
+  }
+}
+
+ensure_column('readings', 'replayed', 'replayed INTEGER DEFAULT 0');
+ensure_column('readings', 'estimated_measured_at', 'estimated_measured_at TEXT');
+
 // Prepared statements (reused on every insert / query — faster than ad-hoc)
 const insertStmt = db.prepare(`
   INSERT OR IGNORE INTO readings
     (device_id, sequence, timestamp, temperature_c, humidity_rh,
-     co2_ppm, voc_index, temp_sources, hum_sources)
+     co2_ppm, voc_index, temp_sources, hum_sources, replayed)
   VALUES
     (@device_id, @sequence, @timestamp, @temperature_c, @humidity_rh,
-     @co2_ppm, @voc_index, @temp_sources, @hum_sources)
+     @co2_ppm, @voc_index, @temp_sources, @hum_sources, @replayed)
 `);
 
 const queryByHours = db.prepare(`
-  SELECT * FROM readings
-  WHERE received_at >= datetime('now', 'localtime', '-' || ? || ' hours')
-  ORDER BY id ASC
+  SELECT *, COALESCE(estimated_measured_at, received_at) AS display_time
+  FROM readings
+  WHERE COALESCE(estimated_measured_at, received_at) >= datetime('now', 'localtime', '-' || ? || ' hours')
+  ORDER BY COALESCE(estimated_measured_at, received_at) ASC, id ASC
 `);
 
 const queryLatest = db.prepare(`
-  SELECT * FROM readings ORDER BY id DESC LIMIT 1
+  SELECT *, COALESCE(estimated_measured_at, received_at) AS display_time
+  FROM readings
+  ORDER BY id DESC LIMIT 1
+`);
+
+const updateLiveMeasuredAt = db.prepare(`
+  UPDATE readings
+  SET estimated_measured_at = ?
+  WHERE id = ?
+`);
+
+const backfillReplayedRows = db.prepare(`
+  UPDATE readings
+  SET estimated_measured_at = datetime(?, '-' || ((? - sequence) * ?) || ' seconds')
+  WHERE device_id = ?
+    AND replayed = 1
+    AND estimated_measured_at IS NULL
+    AND sequence < ?
 `);
 
 // ── HTTP server ────────────────────────────────────────────
@@ -136,13 +169,21 @@ wss.on('connection', (ws) => {
   });
 });
 
-function broadcast(record) {
-  const msg = JSON.stringify({ type: 'reading', data: record });
+function send_ws_message(message) {
+  const msg = JSON.stringify(message);
   for (const ws of wsClients) {
     if (ws.readyState === 1) {   // OPEN
       ws.send(msg);
     }
   }
+}
+
+function broadcast(record) {
+  send_ws_message({ type: 'reading', data: record });
+}
+
+function broadcast_history_refresh() {
+  send_ws_message({ type: 'history_refresh' });
 }
 
 // ── MQTT subscriber ────────────────────────────────────────
@@ -203,6 +244,7 @@ mqttClient.on('message', (topic, payload) => {
     voc_index:     record.voc_index     ?? null,
     temp_sources:  record.temp_sources  ?? 0,
     hum_sources:   record.hum_sources   ?? 0,
+    replayed:      record.replayed ? 1 : 0,
   };
 
   // INSERT OR IGNORE: the UNIQUE(device_id, sequence) constraint
@@ -217,7 +259,7 @@ mqttClient.on('message', (topic, payload) => {
   }
 
   // New record stored — log and push to all browsers
-  console.log(`[DB]   Stored: seq=${row.sequence}  T=${row.temperature_c ?? '--'}  RH=${row.humidity_rh ?? '--'}  CO2=${row.co2_ppm ?? '--'}  VOC=${row.voc_index ?? '--'}`);
+  console.log(`[DB]   Stored: seq=${row.sequence}  T=${row.temperature_c ?? '--'}  RH=${row.humidity_rh ?? '--'}  CO2=${row.co2_ppm ?? '--'}  VOC=${row.voc_index ?? '--'}  replayed=${row.replayed}`);
 
   // Attach the auto-generated id and server-side timestamp for the frontend
   row.id = info.lastInsertRowid;
@@ -229,7 +271,29 @@ mqttClient.on('message', (topic, payload) => {
 
   publish_ack(row, false);
 
-  console.log(`[WS]   Broadcast: seq=${row.sequence} received_at=${row.received_at ?? '--'} firmware_ts=${row.timestamp || '--'}`);
+  if (row.replayed) {
+    // Replayed SD records are reliable after ACK, but their display time is
+    // estimated only after the next live record provides an anchor. Avoid
+    // broadcasting a temporary vertical wall to the charts.
+    console.log(`[WS]   Replayed seq=${row.sequence} stored; waiting for live anchor before dashboard refresh.`);
+    return;
+  }
+
+  // Live records are their own measurement-time anchor. Backfill any replayed
+  // rows before this live sequence using the known commit interval.
+  row.estimated_measured_at = row.received_at;
+  row.display_time = row.estimated_measured_at;
+  updateLiveMeasuredAt.run(row.estimated_measured_at, row.id);
+
+  const backfill = backfillReplayedRows.run(row.received_at, row.sequence, SAMPLE_INTERVAL_SEC, row.device_id, row.sequence);
+  if (backfill.changes > 0) {
+    console.log(`[TIME] Backfilled ${backfill.changes} replayed row(s) using live seq=${row.sequence} as anchor.`);
+    console.log('[WS]   Requesting dashboard history refresh after replay backfill.');
+    broadcast_history_refresh();
+    return;
+  }
+
+  console.log(`[WS]   Broadcast: seq=${row.sequence} received_at=${row.received_at ?? '--'} display_time=${row.display_time ?? '--'} firmware_ts=${row.timestamp || '--'}`);
   broadcast(row);
 });
 
