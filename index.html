@@ -402,7 +402,14 @@
           scales: {
             x: {
               type: 'time',
-              time: { tooltipFormat: 'HH:mm:ss', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } },
+              time: {
+                tooltipFormat: 'HH:mm:ss',
+                displayFormats: {
+                  second: 'HH:mm',
+                  minute: 'HH:mm',
+                  hour: 'HH:mm'
+                }
+              },
               grid: { color: '#0d1a0d' },
               ticks: { maxTicksLimit: 8, color: '#1a4a1a' },
             },
